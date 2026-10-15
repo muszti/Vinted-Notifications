@@ -46,6 +46,7 @@ class Requester:
         self.locale = "www.vinted.fr"
         self.VINTED_AUTH_URL = f"https://{self.locale}/"
         self.MAX_RETRIES = 3
+        self._iso_locales = {}
         self.session = requests.Session()
         self.debug = debug
         self._refresh_headers()
@@ -109,6 +110,42 @@ class Requester:
             locale = locale[len(Urls.VINTED_AUTH_HOST_PREFIX) :]
         return f"{Urls.VINTED_API_HOST_PREFIX}{locale}"
 
+    def get_iso_locale(self):
+        """
+        Return the ISO locale (e.g. 'de-AT') of the current www host.
+
+        svc-catalogue picks the marketplace from the `Locale` request header, not
+        from the api.vinted.<tld> host or the bearer token: without it every
+        domain answers with the same catalogue, so a vinted.at query silently
+        returns vinted.hu listings. The value is the `anonymous-iso-locale`
+        cookie the www host hands out; it is fetched once per host with a
+        throwaway request so the session jar never holds two conflicting
+        `access_token_web` cookies.
+
+        Returns:
+            str or None: The ISO locale, or None if the host did not provide one.
+        """
+        if self.locale not in self._iso_locales:
+            iso = None
+            try:
+                response = requests.head(
+                    self.VINTED_AUTH_URL,
+                    headers={"User-Agent": self.HEADER["User-Agent"]},
+                    proxies=self.session.proxies,
+                    timeout=15,
+                )
+                iso = response.cookies.get("anonymous-iso-locale")
+            except Exception:
+                logger.warning(
+                    f"Could not fetch the ISO locale of {self.VINTED_AUTH_URL}",
+                    exc_info=True,
+                )
+            if not iso:
+                # Don't cache a failure, so the next search retries.
+                return None
+            self._iso_locales[self.locale] = iso
+        return self._iso_locales[self.locale]
+
     def _auth_headers(self):
         """
         Build the per-request authentication headers for the catalogue API.
@@ -127,6 +164,9 @@ class Requester:
             headers["Authorization"] = f"Bearer {token}"
         if anon_id:
             headers["x-anon-id"] = anon_id
+        iso_locale = self.get_iso_locale()
+        if iso_locale:
+            headers["Locale"] = iso_locale
         return headers
 
     def get(self, url, params=None):
