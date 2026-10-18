@@ -10,6 +10,27 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 
+def authorized(handler):
+    """Only run the command handler when the message comes from the configured chat id."""
+
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        allowed = str(db.get_parameter("telegram_chat_id") or "").strip()
+        # Group chat ids are negative, so compare as strings
+        if not allowed or str(update.effective_chat.id) != allowed:
+            logger.warning(
+                f"Unauthorized telegram command from chat id {update.effective_chat.id}"
+            )
+            if update.effective_message is not None:
+                try:
+                    await update.effective_message.reply_text("Not authorized.")
+                except Exception as e:
+                    logger.error(f"Error sending unauthorized reply: {str(e)}")
+            return
+        await handler(update, context)
+
+    return wrapper
+
+
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         ver = db.get_parameter("version")
@@ -42,18 +63,24 @@ class LeRobot:
             self.new_items_queue = queue
 
             # Handler verify if bot is running
-            self.app.add_handler(CommandHandler("hello", hello))
+            self.app.add_handler(CommandHandler("hello", authorized(hello)))
             # Keyword handlers
-            self.app.add_handler(CommandHandler("add_query", self.add_query))
-            self.app.add_handler(CommandHandler("remove_query", self.remove_query))
-            self.app.add_handler(CommandHandler("queries", self.queries))
+            self.app.add_handler(CommandHandler("add_query", authorized(self.add_query)))
+            self.app.add_handler(
+                CommandHandler("remove_query", authorized(self.remove_query))
+            )
+            self.app.add_handler(CommandHandler("queries", authorized(self.queries)))
             # Allowlist handlers
             self.app.add_handler(
-                CommandHandler("clear_allowlist", self.clear_allowlist)
+                CommandHandler("clear_allowlist", authorized(self.clear_allowlist))
             )
-            self.app.add_handler(CommandHandler("add_country", self.add_country))
-            self.app.add_handler(CommandHandler("remove_country", self.remove_country))
-            self.app.add_handler(CommandHandler("allowlist", self.allowlist))
+            self.app.add_handler(
+                CommandHandler("add_country", authorized(self.add_country))
+            )
+            self.app.add_handler(
+                CommandHandler("remove_country", authorized(self.remove_country))
+            )
+            self.app.add_handler(CommandHandler("allowlist", authorized(self.allowlist)))
 
             # TODO : Help command
 
