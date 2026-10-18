@@ -451,7 +451,7 @@ def clear_item_queue(items_queue, new_items_queue):
         if is_first_run:
             logger.info(
                 f"First run for query {query_id}: {len(data)} item(s) currently listed, "
-                f"all of them will be announced."
+                f"the most recent {MAX_NOTIFICATIONS_PER_RUN} will be announced."
             )
 
         # Read once: the allowlist doesn't change mid-batch and this was a db hit per item
@@ -503,10 +503,10 @@ def clear_item_queue(items_queue, new_items_queue):
 
         # data arrives newest first and is walked in reverse, so to_notify runs
         # oldest to newest. Trim from the front: a backlog is worth dropping, the
-        # listings that just appeared are not. A first run is the user adding a query
-        # on purpose, so its currently listed items are all wanted (up to
-        # FIRST_RUN_MAX_ITEMS, fetched across pages) and the cap does not apply.
-        if not is_first_run and len(to_notify) > MAX_NOTIFICATIONS_PER_RUN:
+        # listings that just appeared are not. This applies to a first run too: the
+        # first run fetches everything listed (FIRST_RUN_MAX_ITEMS across pages), but
+        # only the most recent MAX_NOTIFICATIONS_PER_RUN are announced.
+        if len(to_notify) > MAX_NOTIFICATIONS_PER_RUN:
             logger.warning(
                 f"{len(to_notify)} unseen items for query {query_id}; notifying the "
                 f"{MAX_NOTIFICATIONS_PER_RUN} most recent and recording the rest silently."
