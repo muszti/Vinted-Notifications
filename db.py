@@ -223,6 +223,32 @@ def remove_all_queries_from_db():
             conn.close()
 
 
+def clear_items_and_reset_queries():
+    """
+    Delete all recorded items and reset every query's last_item watermark,
+    so the next scrape performs a first run again. Queries, parameters,
+    allowlist and banwords are left untouched.
+
+    Returns:
+        int: Number of deleted item rows, or -1 on error
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM items")
+        deleted = cursor.rowcount
+        cursor.execute("UPDATE queries SET last_item = NULL")
+        conn.commit()
+        return deleted
+    except Exception:
+        print_exc()
+        return -1
+    finally:
+        if conn:
+            conn.close()
+
+
 def update_query_in_db(query_id, query, name=None, banwords=None):
     """
     Update an existing query in the database.

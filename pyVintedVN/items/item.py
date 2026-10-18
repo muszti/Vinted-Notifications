@@ -55,11 +55,14 @@ class Item:
             brand if brand and brand != self.title else None
         )
 
+        second_line = item_box.get("second_line") or ""
         size = data.get("size_title")
         if not size:
-            second_line = item_box.get("second_line") or ""
             size = second_line.split(" · ")[0] if " · " in second_line else None
         self.size_title = size
+        # The condition (new, unopened, very good...) is the last part of that line,
+        # so it is the same whether the item is branded or not.
+        self.condition = second_line.split(" · ")[-1] or None
 
         self.currency = data["price"]["currency_code"]
         self.price = data["price"]["amount"]
