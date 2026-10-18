@@ -350,6 +350,23 @@ def update_config():
     return redirect(url_for("config"))
 
 
+@app.route("/clear_db", methods=["POST"])
+def clear_db():
+    if request.form.get("confirm_text") != "CLEAR":
+        flash("Confirmation text did not match; nothing was cleared", "error")
+        return redirect(url_for("config"))
+
+    deleted = db.clear_items_and_reset_queries()
+    if deleted < 0:
+        flash("Failed to clear the database", "error")
+    else:
+        flash(
+            f"{deleted} items deleted; the next run re-notifies all currently listed items",
+            "success",
+        )
+    return redirect(url_for("config"))
+
+
 @app.route("/control/<process_name>/<action>", methods=["POST"])
 def control_process(process_name, action):
     if process_name not in ["telegram", "rss"]:

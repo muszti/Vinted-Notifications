@@ -254,6 +254,29 @@
 
 <div class="row mt-4">
     <div class="col-md-12">
+        <div class="card border-danger">
+            <div class="card-header d-flex align-items-center">
+                <i class="bi bi-exclamation-triangle me-2 text-danger"></i>
+                <h5 class="card-title mb-0">Danger zone</h5>
+            </div>
+            <div class="card-body">
+                <p>Clears every item the bot has recorded and resets all queries. Every query will do a first run again and re-send ALL currently listed items (up to 300 per query) to Telegram. Queries, settings, allowlist and banwords are kept.</p>
+                <form method="post" action="/clear_db"
+                      onsubmit="return confirm('Really clear the DB? All listed items will be re-sent to Telegram.');">
+                    <div class="mb-3">
+                        <label for="confirm_text" class="form-label">Type CLEAR to confirm</label>
+                        <input type="text" class="form-control" id="confirm_text" name="confirm_text"
+                               autocomplete="off" required>
+                    </div>
+                    <button type="submit" class="btn btn-danger">Clear DB</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-12">
         <div class="card">
             <div class="card-header d-flex align-items-center">
                 <i class="bi bi-toggles me-2 text-info"></i>

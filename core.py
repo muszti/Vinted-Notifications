@@ -1,6 +1,8 @@
 import db
 import html
+import time
 import requests
+from collections import OrderedDict
 from pyVintedVN import Vinted, requester
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from logger import get_logger
@@ -12,6 +14,21 @@ logger = get_logger(__name__)
 # is answered purely by "have we recorded its id before?". That makes a wiped or
 # freshly seeded database the only real flood risk, and this caps the blast radius.
 MAX_NOTIFICATIONS_PER_RUN = 10
+
+# A brand-new query announces everything it currently lists, paging through the
+# results. Capped because every item becomes a Telegram message (flood limits) and
+# every page is a Vinted request (429 risk); a query matching thousands of listings
+# would otherwise hammer both.
+FIRST_RUN_MAX_ITEMS = 300
+# Pause between first-run pages so paging doesn't look like a burst to Vinted.
+FIRST_RUN_PAGE_DELAY = 1
+
+# Seller country lookups cost one API request each and a seller's country doesn't
+# change, so remember them. Bounded (LRU) so a long-running process can't grow forever,
+# and expiring so a seller who moves is eventually re-checked.
+_COUNTRY_CACHE = OrderedDict()
+_COUNTRY_CACHE_MAX = 5000
+_COUNTRY_CACHE_TTL = 24 * 3600
 
 
 def process_query(query, name=None, banwords=None):
@@ -97,24 +114,14 @@ def get_formatted_query_list():
     Returns:
         str: A formatted string with all queries, numbered
     """
-    all_queries = db.get_queries()
+    all_queries = db.get_queries() or []
     queries_keywords = []
     for query in all_queries:
-        parsed_url = urlparse(query[1])
-        query_params = parse_qs(parsed_url.query)
-
-        # Get the name or Extract the value of 'search_text'
+        # Get the name, else the value of 'search_text', else the whole query URL
         query_name = (
-            query[3]
-            if query[3] is not None
-            else query_params.get("search_text", [None])[0]
+            query[3] or parse_qs(urlparse(query[1]).query).get("search_text", [None])[0] or query[1]
         )
-
-        if query_name[0] is None:
-            # Use query text instead of the whole query object
-            queries_keywords.append([query[1]])
-        else:
-            queries_keywords.append(query_name)
+        queries_keywords.append(query_name)
 
     query_list = ("\n").join(
         [str(i + 1) + ". " + j for i, j in enumerate(queries_keywords)]
@@ -252,33 +259,57 @@ def get_user_country(profile_id):
     """
     Get the country code for a Vinted user.
 
-    Makes an API request to retrieve the user's country code.
-    Handles rate limiting by trying an alternative endpoint.
+    Results are cached in memory (LRU, bounded, 24h expiry). Otherwise makes an API
+    request to retrieve the user's country code, handling rate limiting by trying an
+    alternative endpoint. Never raises: any failure yields "XX".
 
     Args:
         profile_id (str): The Vinted user's profile ID
 
     Returns:
-        str: The user's country code (2-letter ISO code) or "XX" if it can't be determined
+        str: The user's country code (2-letter ISO code) or "XX" if it can't be determined.
+            "XX" is never cached: it passes the allowlist, so remembering a transient
+            failure would let that seller through for the whole TTL.
     """
-    # Users are shared between all Vinted platforms, so we can use whatever locale we want
-    url = f"https://www.vinted.fr/api/v2/users/{profile_id}?localize=false"
-    response = requester.get(url)
-    # That's a LOT of requests, so if we get a 429 we wait a bit before retrying once
-    if response.status_code == 429:
-        # In case of rate limit, we're switching the endpoint. This one is slower, but it doesn't RL as soon.
-        # We're limiting the items per page to 1 to grab as little data as possible
-        url = f"https://www.vinted.fr/api/v2/users/{profile_id}/items?page=1&per_page=1"
+    key = str(profile_id)
+    cached = _COUNTRY_CACHE.get(key)
+    if cached is not None:
+        country, stored_at = cached
+        if time.time() - stored_at < _COUNTRY_CACHE_TTL:
+            _COUNTRY_CACHE.move_to_end(key)
+            return country
+        del _COUNTRY_CACHE[key]
+
+    try:
+        # Users are shared between all Vinted platforms, so we can use whatever locale we want
+        url = f"https://www.vinted.fr/api/v2/users/{profile_id}?localize=false"
         response = requester.get(url)
-        try:
-            user_country = response.json()["items"][0]["user"]["country_iso_code"]
-        except KeyError:
-            logger.warning(
-                "Couldn't get the country due to too many requests. Returning default value."
-            )
-            user_country = "XX"
-    else:
-        user_country = response.json()["user"]["country_iso_code"]
+        # That's a LOT of requests, so if we get a 429 we wait a bit before retrying once
+        if response.status_code == 429:
+            # In case of rate limit, we're switching the endpoint. This one is slower, but it doesn't RL as soon.
+            # We're limiting the items per page to 1 to grab as little data as possible
+            url = f"https://www.vinted.fr/api/v2/users/{profile_id}/items?page=1&per_page=1"
+            response = requester.get(url)
+            try:
+                user_country = response.json()["items"][0]["user"]["country_iso_code"]
+            except (KeyError, IndexError):
+                logger.warning(
+                    "Couldn't get the country due to too many requests. Returning default value."
+                )
+                return "XX"
+        else:
+            user_country = response.json()["user"]["country_iso_code"]
+    except Exception as e:
+        # A seller we can't look up must not abort the whole batch of items
+        logger.warning(f"Couldn't get the country of user {profile_id}: {e}")
+        return "XX"
+
+    if not user_country or user_country == "XX":
+        return "XX"
+    _COUNTRY_CACHE[key] = (user_country, time.time())
+    _COUNTRY_CACHE.move_to_end(key)
+    while len(_COUNTRY_CACHE) > _COUNTRY_CACHE_MAX:
+        _COUNTRY_CACHE.popitem(last=False)
     return user_country
 
 
@@ -294,7 +325,7 @@ def process_items(queue):
         None
     """
 
-    all_queries = db.get_queries()
+    all_queries = db.get_queries() or []
 
     # Initialize Vinted
     vinted = Vinted()
@@ -304,11 +335,78 @@ def process_items(queue):
 
     # for each keyword we parse data
     for query in all_queries:
-        all_items = vinted.items.search(query[1], nbr_items=items_per_query)
-        # Filter to only include new items. This should reduce the amount of db calls.
-        data = [item for item in all_items if item.is_new_item()]
-        queue.put((data, query[0]))
-        logger.info(f"Scraped {len(data)} items for query: {query[1]}")
+        # One failing query (bad URL, 429, network blip) must not starve the others
+        try:
+            # last_item (column 2) is None until a query has produced its first item
+            is_first_run = query[2] is None
+            if is_first_run:
+                all_items = fetch_first_run_items(vinted, query[1], items_per_query)
+            else:
+                all_items = vinted.items.search(query[1], nbr_items=items_per_query)
+            # Filter to only include new items. This should reduce the amount of db calls.
+            data = [item for item in all_items if item.is_new_item()]
+            queue.put((data, query[0]))
+            logger.info(f"Scraped {len(data)} items for query: {query[1]}")
+        except Exception as e:
+            logger.error(f"Query {query[0]} failed: {e}", exc_info=True)
+            continue
+
+
+def fetch_first_run_items(vinted, query_url, items_per_query):
+    """
+    Fetch every item a brand-new query currently lists, paging until exhausted.
+
+    Args:
+        vinted (Vinted): The Vinted client
+        query_url (str): The query URL
+        items_per_query (int): Page size to request
+
+    Returns:
+        list: Unique items, newest first, at most FIRST_RUN_MAX_ITEMS. A failure on
+            page 1 propagates (the query is retried next cycle); a failure on a later
+            page keeps what was collected so far.
+    """
+    collected = []
+    # Results are newest first, so listings added while we page shift later pages
+    # and can repeat an item; dedupe by id.
+    seen = set()
+    page = 1
+    while True:
+        try:
+            items = vinted.items.search(query_url, nbr_items=items_per_query, page=page)
+        except Exception as e:
+            if page == 1:
+                raise
+            logger.warning(
+                f"Page {page} failed for query {query_url}: {e}. "
+                f"Keeping the {len(collected)} item(s) fetched so far."
+            )
+            break
+        if not items:
+            break
+        added = 0
+        for item in items:
+            if item.id not in seen:
+                seen.add(item.id)
+                collected.append(item)
+                added += 1
+        # A page of only known ids means the API is repeating itself; stop rather than loop forever.
+        # Deliberately no "short page means last page" check: the server may clamp per_page.
+        if added == 0:
+            break
+        if len(collected) >= FIRST_RUN_MAX_ITEMS:
+            logger.warning(
+                f"First run for query {query_url} hit the {FIRST_RUN_MAX_ITEMS} item cap; "
+                f"ignoring the remaining listings."
+            )
+            collected = collected[:FIRST_RUN_MAX_ITEMS]
+            break
+        page += 1
+        time.sleep(FIRST_RUN_PAGE_DELAY)
+    logger.info(
+        f"First run for query {query_url}: fetched {len(collected)} item(s) over {page} page(s)"
+    )
+    return collected
 
 
 def get_query_display_name(query_id, query_row):
@@ -352,9 +450,12 @@ def clear_item_queue(items_queue, new_items_queue):
         is_first_run = last_query_timestamp is None
         if is_first_run:
             logger.info(
-                f"First run for query {query_id}: recording {len(data)} item(s) "
-                f"without notifying, so the existing catalogue is not replayed."
+                f"First run for query {query_id}: {len(data)} item(s) currently listed, "
+                f"all of them will be announced."
             )
+
+        # Read once: the allowlist doesn't change mid-batch and this was a db hit per item
+        allowlist = db.get_allowlist()
 
         to_notify = []
         for item in reversed(data):
@@ -375,9 +476,9 @@ def clear_item_queue(items_queue, new_items_queue):
                 continue
             # If there's an allowlist and
             # If the user's country is not in the allowlist, we just update the timestamp
-            if db.get_allowlist() != 0 and (
+            if allowlist != 0 and (
                 get_user_country(item.raw_data["user"]["id"])
-            ) not in (db.get_allowlist() + ["XX"]):
+            ) not in (allowlist + ["XX"]):
                 db.update_last_timestamp(query_id, item.raw_timestamp)
                 continue
             # Check if the item title contains any banwords
@@ -400,18 +501,23 @@ def clear_item_queue(items_queue, new_items_queue):
                 currency=item.currency,
             )
 
-        if is_first_run:
-            return
-
         # data arrives newest first and is walked in reverse, so to_notify runs
         # oldest to newest. Trim from the front: a backlog is worth dropping, the
-        # listings that just appeared are not.
-        if len(to_notify) > MAX_NOTIFICATIONS_PER_RUN:
+        # listings that just appeared are not. A first run is the user adding a query
+        # on purpose, so its currently listed items are all wanted (up to
+        # FIRST_RUN_MAX_ITEMS, fetched across pages) and the cap does not apply.
+        if not is_first_run and len(to_notify) > MAX_NOTIFICATIONS_PER_RUN:
             logger.warning(
                 f"{len(to_notify)} unseen items for query {query_id}; notifying the "
                 f"{MAX_NOTIFICATIONS_PER_RUN} most recent and recording the rest silently."
             )
             to_notify = to_notify[-MAX_NOTIFICATIONS_PER_RUN:]
+
+        # Insurance: if no item moved the watermark (e.g. everything was already in
+        # the db from another query), the next cycle would be a first run again and
+        # re-fetch and re-flood all listings. Pin it explicitly.
+        if data and db.get_last_timestamp(query_id) is None:
+            db.update_last_timestamp(query_id, max(i.raw_timestamp for i in data))
 
         for item in to_notify:
             # We create the message
@@ -422,12 +528,16 @@ def clear_item_queue(items_queue, new_items_queue):
                 title=item.title,
                 price=str(item.price) + " " + item.currency,
                 brand=item.brand_title,
+                condition=html.escape(item.condition or ""),
                 image=None if item.photo is None else item.photo,
                 query=escaped_query_name,
             )
             # Templates saved before {query} existed would otherwise never show the query
             if "{query}" not in message_template:
                 content = f"🔎 <b>{escaped_query_name}</b>\n{content}"
+            # Same for {condition}: templates saved before it existed get it appended
+            if "{condition}" not in message_template and item.condition:
+                content += f"\n📦 Condition : {html.escape(item.condition)}"
             # add the item to the queue
             new_items_queue.put((content, item.url, "Open Vinted", None, None))
             # new_items_queue.put((content, item.url, "Open Vinted", item.buy_url, "Open buy page"))
