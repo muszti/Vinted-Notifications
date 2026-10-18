@@ -78,15 +78,17 @@ def update_last_timestamp(query_id, timestamp):
             conn.close()
 
 
-def add_item_to_db(id, title, query_id, price, timestamp, photo_url, currency="EUR"):
+def add_item_to_db(
+    id, title, query_id, price, timestamp, photo_url, currency="EUR", condition=None
+):
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         # Insert into db the id and the query_id related to the item
         cursor.execute(
-            "INSERT INTO items (item, title, price, currency, timestamp, photo_url, query_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (id, title, price, currency, timestamp, photo_url, query_id),
+            "INSERT INTO items (item, title, price, currency, timestamp, photo_url, query_id, condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, title, price, currency, timestamp, photo_url, query_id, condition),
         )
         # Update the last item for the query
         cursor.execute(
@@ -382,31 +384,34 @@ def get_all_parameters():
             conn.close()
 
 
-def get_items(limit=50, query=None, hidden=False):
+def get_items(limit=50, query=None, hidden=False, condition=None):
     conn = None
     try:
         h = 1 if hidden else 0
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        where = ["i.hidden=?"]
+        params = [h]
         if query:
             # Get the query_id for the given query
             cursor.execute("SELECT id FROM queries WHERE query=?", (query,))
             result = cursor.fetchone()
-            if result:
-                query_id = result[0]
-                # Get items with the matching query_id
-                cursor.execute(
-                    "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url, q.query_name, i.hidden FROM items i JOIN queries q ON i.query_id = q.id WHERE i.query_id=? AND i.hidden=? ORDER BY i.timestamp DESC LIMIT ?",
-                    (query_id, h, limit),
-                )
-            else:
+            if not result:
                 return []
-        else:
-            # Join with queries table to get the query text
-            cursor.execute(
-                "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url, q.query_name, i.hidden FROM items i JOIN queries q ON i.query_id = q.id WHERE i.hidden=? ORDER BY i.timestamp DESC LIMIT ?",
-                (h, limit),
-            )
+            where.append("i.query_id=?")
+            params.append(result[0])
+        if condition:
+            where.append("i.condition=?")
+            params.append(condition)
+        params.append(limit)
+        # Join with queries table to get the query text. category and condition are
+        # appended last so the positional indexes used by the web UI stay the same.
+        cursor.execute(
+            "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url, q.query_name, i.hidden, i.category, i.condition FROM items i JOIN queries q ON i.query_id = q.id WHERE "
+            + " AND ".join(where)
+            + " ORDER BY i.timestamp DESC LIMIT ?",
+            params,
+        )
         return cursor.fetchall()
     except Exception:
         print_exc()
@@ -450,6 +455,57 @@ def set_items_hidden(ids, hidden):
     except Exception:
         print_exc()
         return -1
+    finally:
+        if conn:
+            conn.close()
+
+
+def set_item_category(id, category):
+    """
+    Store the category of an item. It is read from the item page, which is only
+    fetched for items that get announced, so most items keep no category.
+
+    Args:
+        id (str): Item id to update
+        category (str): Category title
+
+    Returns:
+        bool: True if the update succeeded, False on error
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE items SET category=? WHERE item=?", (category, id))
+        conn.commit()
+        return True
+    except Exception:
+        print_exc()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_item_conditions():
+    """
+    List the conditions seen in the items table, for the web UI filter. The values
+    are localized by Vinted, so they are read from the data rather than hardcoded.
+
+    Returns:
+        list: Distinct condition strings, or [] on error
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT condition FROM items WHERE condition IS NOT NULL ORDER BY condition"
+        )
+        return [row[0] for row in cursor.fetchall()]
+    except Exception:
+        print_exc()
+        return []
     finally:
         if conn:
             conn.close()

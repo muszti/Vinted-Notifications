@@ -18,7 +18,7 @@
                 <form action="/items" method="get">
                     {% if show_hidden %}<input type="hidden" name="show_hidden" value="1">{% endif %}
                     <div class="row">
-                        <div class="col-md-5">
+                        <div class="col-md-4">
                             <div class="form-group mb-3">
                                 <label for="query" class="form-label fw-semibold">Search by Query</label>
                                 <select class="form-select" id="query" name="query">
@@ -33,7 +33,18 @@
                                 </select>
                             </div>
                         </div>
-                        <div class="col-md-5">
+                        <div class="col-md-3">
+                            <div class="form-group mb-3">
+                                <label for="condition" class="form-label fw-semibold">Condition</label>
+                                <select class="form-select" id="condition" name="condition">
+                                    <option value="">All conditions</option>
+                                    {% for value in conditions %}
+                                    <option value="{{ value }}" {% if selected_condition == value %}selected{% endif %}>{{ value }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
                             <div class="form-group mb-3">
                                 <label for="limit" class="form-label fw-semibold">Number of Items</label>
                                 <select class="form-select" id="limit" name="limit">
@@ -72,7 +83,7 @@
                     </h5>
                 </div>
                 <div class="d-flex align-items-center">
-                <a href="{{ url_for('items', query=selected_query, limit=limit, show_hidden=(None if show_hidden else '1')) }}"
+                <a href="{{ url_for('items', query=selected_query, limit=limit, condition=(selected_condition or None), show_hidden=(None if show_hidden else '1')) }}"
                    class="btn btn-sm btn-outline-secondary me-2">
                     {% if show_hidden %}<i class="bi bi-arrow-left me-1"></i> Back to new items{% else %}<i class="bi bi-eye-slash me-1"></i> Show hidden ({{ hidden_count }}){% endif %}
                 </a>
@@ -90,6 +101,7 @@
             <div class="card-body">
                 <input type="hidden" name="return_query" value="{{ selected_query }}">
                 <input type="hidden" name="return_limit" value="{{ limit }}">
+                <input type="hidden" name="return_condition" value="{{ selected_condition }}">
                 {% if show_hidden %}<input type="hidden" name="return_show_hidden" value="1">{% endif %}
                 {% for item in items %}<input type="hidden" name="visible_ids" value="{{ item.id }}">
                 {% endfor %}
@@ -127,6 +139,16 @@
                                 <p class="card-text mb-1">
                                     <span class="fw-bold text-dark" style="font-size: 1.1rem;">{{ item.price }} {{ item.currency }}</span>
                                 </p>
+                                {% if item.category %}
+                                <p class="card-text small text-muted mb-1">
+                                    <i class="bi bi-tag me-1"></i> {{ item.category }}
+                                </p>
+                                {% endif %}
+                                {% if item.condition %}
+                                <p class="card-text small text-muted mb-1">
+                                    <i class="bi bi-box-seam me-1"></i> {{ item.condition }}
+                                </p>
+                                {% endif %}
                                 <p class="card-text small text-muted mb-0">
                                     <i class="bi bi-calendar me-1"></i> {{ item.timestamp }}
                                 </p>
@@ -158,6 +180,8 @@
                             <th>Title</th>
                             <th>Price</th>
                             <th>Query</th>
+                            <th>Category</th>
+                            <th>Condition</th>
                             <th>Date</th>
                             <th>Actions</th>
                         </tr>
@@ -180,6 +204,8 @@
                             <td>{{ item.title }}</td>
                             <td>{{ item.price }} {{ item.currency }}</td>
                             <td>{{ item.query|truncate(30) }}</td>
+                            <td>{{ item.category or '' }}</td>
+                            <td>{{ item.condition or '' }}</td>
                             <td>{{ item.timestamp }}</td>
                             <td>
                                 <a href="{{ item.url }}" target="_blank" class="btn btn-sm btn-primary">
@@ -192,7 +218,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="7" class="text-center">No items found</td>
+                            <td colspan="9" class="text-center">No items found</td>
                         </tr>
                         {% endfor %}
                         </tbody>

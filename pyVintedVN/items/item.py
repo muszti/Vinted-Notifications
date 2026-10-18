@@ -1,5 +1,31 @@
+import json
+import re
 import time
 from datetime import datetime, timezone
+
+
+def category_from_page(page_html):
+    """
+    Get the innermost category of an item from the HTML of its Vinted page.
+
+    The catalogue API does not carry the category, but the item page embeds its
+    breadcrumb trail as JSON. A branded item ends that trail with one extra crumb
+    per brand: its URL has a /brand/<id> part and its title is "<brand> <category>".
+    Skipping those leaves the last crumb that is the category itself.
+
+    Args:
+        page_html (str): The HTML of the item page.
+
+    Returns:
+        str: The category title, or None if the page has no usable breadcrumbs.
+    """
+    # The trail is embedded in a JavaScript string, so its quotes are escaped
+    match = re.search(r'\\"breadcrumbs\\":\[(.*?)\]', page_html)
+    if not match:
+        return None
+    crumbs = json.loads("[" + match.group(1).replace('\\"', '"') + "]")
+    categories = [crumb["title"] for crumb in crumbs if "/brand/" not in crumb["url"]]
+    return categories[-1] if categories else None
 
 
 class Item:

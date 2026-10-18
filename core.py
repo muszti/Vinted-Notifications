@@ -4,6 +4,7 @@ import time
 import requests
 from collections import OrderedDict
 from pyVintedVN import Vinted, requester
+from pyVintedVN.items.item import category_from_page
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from logger import get_logger
 
@@ -499,6 +500,7 @@ def clear_item_queue(items_queue, new_items_queue):
                 photo_url=item.photo,
                 query_id=query_id,
                 currency=item.currency,
+                condition=item.condition,
             )
 
         # data arrives newest first and is walked in reverse, so to_notify runs
@@ -520,6 +522,10 @@ def clear_item_queue(items_queue, new_items_queue):
             db.update_last_timestamp(query_id, max(i.raw_timestamp for i in data))
 
         for item in to_notify:
+            # The category is only on the item page, so it is read here, for announced items
+            category = fetch_category(item)
+            if category:
+                db.set_item_category(item.id, category)
             # We create the message
             message_template = db.get_parameter("message_template")
             # Escaped because the message is sent with Telegram's HTML parse mode
@@ -529,18 +535,43 @@ def clear_item_queue(items_queue, new_items_queue):
                 price=str(item.price) + " " + item.currency,
                 brand=item.brand_title,
                 condition=html.escape(item.condition or ""),
+                category=html.escape(category or ""),
                 image=None if item.photo is None else item.photo,
                 query=escaped_query_name,
             )
             # Templates saved before {query} existed would otherwise never show the query
             if "{query}" not in message_template:
                 content = f"🔎 <b>{escaped_query_name}</b>\n{content}"
-            # Same for {condition}: templates saved before it existed get it appended
+            # Same for {condition} and {category}: templates saved before them get them appended
             if "{condition}" not in message_template and item.condition:
                 content += f"\n📦 Condition : {html.escape(item.condition)}"
+            if "{category}" not in message_template and category:
+                content += f"\n📂 Category : {html.escape(category)}"
             # add the item to the queue
             new_items_queue.put((content, item.url, "Open Vinted", None, None))
             # new_items_queue.put((content, item.url, "Open Vinted", item.buy_url, "Open buy page"))
+
+
+def fetch_category(item):
+    """
+    Read the category of an item from its Vinted page.
+
+    Any failure is logged and returns None, so the notification still goes out
+    without a category.
+
+    Args:
+        item (Item): The item to look up
+
+    Returns:
+        str: The category title, or None if it could not be read
+    """
+    try:
+        response = requester.get_page(item.url)
+        response.raise_for_status()
+        return category_from_page(response.text)
+    except Exception as e:
+        logger.warning(f"Could not read the category of item {item.id}: {str(e)}")
+        return None
 
 
 def contains_banwords(title, banwords_str):
