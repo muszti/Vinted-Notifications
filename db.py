@@ -382,9 +382,10 @@ def get_all_parameters():
             conn.close()
 
 
-def get_items(limit=50, query=None):
+def get_items(limit=50, query=None, hidden=False):
     conn = None
     try:
+        h = 1 if hidden else 0
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         if query:
@@ -395,21 +396,81 @@ def get_items(limit=50, query=None):
                 query_id = result[0]
                 # Get items with the matching query_id
                 cursor.execute(
-                    "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url, q.query_name FROM items i JOIN queries q ON i.query_id = q.id WHERE i.query_id=? ORDER BY i.timestamp DESC LIMIT ?",
-                    (query_id, limit),
+                    "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url, q.query_name, i.hidden FROM items i JOIN queries q ON i.query_id = q.id WHERE i.query_id=? AND i.hidden=? ORDER BY i.timestamp DESC LIMIT ?",
+                    (query_id, h, limit),
                 )
             else:
                 return []
         else:
             # Join with queries table to get the query text
             cursor.execute(
-                "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url, q.query_name FROM items i JOIN queries q ON i.query_id = q.id ORDER BY i.timestamp DESC LIMIT ?",
-                (limit,),
+                "SELECT i.item, i.title, i.price, i.currency, i.timestamp, q.query, i.photo_url, q.query_name, i.hidden FROM items i JOIN queries q ON i.query_id = q.id WHERE i.hidden=? ORDER BY i.timestamp DESC LIMIT ?",
+                (h, limit),
             )
         return cursor.fetchall()
     except Exception:
         print_exc()
         return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def set_items_hidden(ids, hidden):
+    """
+    Hide or unhide items in the web UI. Hidden items stay in the database,
+    so they still count as seen and are not notified again.
+
+    Args:
+        ids (iterable): Item ids to update
+        hidden (bool): True to hide, False to unhide
+
+    Returns:
+        int: Number of updated rows, or -1 on error
+    """
+    conn = None
+    try:
+        ids = sorted({int(x) for x in ids})
+        if not ids:
+            return 0
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        total = 0
+        # Chunk to stay below SQLite's bound-variable limit
+        for i in range(0, len(ids), 500):
+            chunk = ids[i : i + 500]
+            ph = ",".join("?" * len(chunk))
+            cursor.execute(
+                f"UPDATE items SET hidden=? WHERE item IN ({ph})",
+                (1 if hidden else 0, *chunk),
+            )
+            total += cursor.rowcount
+        conn.commit()
+        return total
+    except Exception:
+        print_exc()
+        return -1
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_hidden_items_count():
+    """
+    Count the items currently hidden in the web UI.
+
+    Returns:
+        int: Number of hidden items, or 0 on error
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM items WHERE hidden=1")
+        return cursor.fetchone()[0]
+    except Exception:
+        print_exc()
+        return 0
     finally:
         if conn:
             conn.close()
