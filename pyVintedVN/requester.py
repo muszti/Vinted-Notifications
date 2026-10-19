@@ -169,6 +169,22 @@ class Requester:
             headers["Locale"] = iso_locale
         return headers
 
+    def get_page(self, url):
+        """
+        Fetch a plain web page (not the API) with the session's proxy and cookies.
+
+        Unlike get(), no API bearer token is sent and no retry is done, so a
+        failing page is just reported to the caller.
+
+        Args:
+            url (str): The URL of the page
+
+        Returns:
+            requests.Response: The response object
+        """
+        proxies.configure_proxy(self.session)
+        return self.session.get(url, timeout=15)
+
     def get(self, url, params=None):
         """
         Make a GET request with retry logic.

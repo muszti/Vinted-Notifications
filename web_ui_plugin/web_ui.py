@@ -242,6 +242,7 @@ def items():
     query_id = request.args.get("query", "")  # Default to empty string instead of None
     limit = int(request.args.get("limit", 50))
     show_hidden = request.args.get("show_hidden") == "1"
+    condition = request.args.get("condition", "")
 
     # Get items
     query_string = None
@@ -253,7 +254,9 @@ def items():
                 query_string = q[1]
                 break
 
-    items_data = db.get_items(limit=limit, query=query_string, hidden=show_hidden)
+    items_data = db.get_items(
+        limit=limit, query=query_string, hidden=show_hidden, condition=condition or None
+    )
     formatted_items = []
 
     for item in items_data:
@@ -276,6 +279,8 @@ def items():
                 ),
                 "url": f"{urlparse(item[5]).scheme}://{urlparse(item[5]).netloc}/items/{item[0]}",
                 "photo_url": item[6],
+                "category": item[9],
+                "condition": item[10],
             }
         )
 
@@ -306,6 +311,8 @@ def items():
         limit=limit,
         show_hidden=show_hidden,
         hidden_count=db.get_hidden_items_count(),
+        selected_condition=condition,
+        conditions=db.get_item_conditions(),
     )
 
 
@@ -326,6 +333,7 @@ def _redirect_back():
             query=return_query,
             limit=return_limit,
             show_hidden="1" if show_hidden else None,
+            condition=request.form.get("return_condition") or None,
         )
     )
 
