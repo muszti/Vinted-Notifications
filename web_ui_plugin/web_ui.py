@@ -241,6 +241,7 @@ def update_query(query_id):
 def items():
     query_id = request.args.get("query", "")  # Default to empty string instead of None
     limit = int(request.args.get("limit", 50))
+    show_hidden = request.args.get("show_hidden") == "1"
 
     # Get items
     query_string = None
@@ -252,12 +253,14 @@ def items():
                 query_string = q[1]
                 break
 
-    items_data = db.get_items(limit=limit, query=query_string)
+    items_data = db.get_items(limit=limit, query=query_string, hidden=show_hidden)
     formatted_items = []
 
     for item in items_data:
         formatted_items.append(
             {
+                "id": item[0],
+                "hidden": item[8],
                 "title": item[1],
                 "price": item[2],
                 "currency": item[3],
@@ -301,7 +304,74 @@ def items():
         selected_query=query_id,
         selected_query_display=selected_query_display,
         limit=limit,
+        show_hidden=show_hidden,
+        hidden_count=db.get_hidden_items_count(),
     )
+
+
+def _redirect_back():
+    return_query = request.form.get("return_query", "")
+    if not return_query.isdigit():
+        return_query = ""
+    try:
+        return_limit = int(request.form.get("return_limit", 50))
+    except ValueError:
+        return_limit = 50
+    if return_limit not in (10, 25, 50, 100):
+        return_limit = 50
+    show_hidden = request.form.get("return_show_hidden") == "1"
+    return redirect(
+        url_for(
+            "items",
+            query=return_query,
+            limit=return_limit,
+            show_hidden="1" if show_hidden else None,
+        )
+    )
+
+
+def _posted_ids():
+    if request.form.get("single_id"):
+        raw_ids = [request.form.get("single_id")]
+    elif request.form.get("action") == "all_visible":
+        raw_ids = request.form.getlist("visible_ids")
+    else:
+        raw_ids = request.form.getlist("ids")
+    ids = set()
+    for raw in raw_ids:
+        try:
+            ids.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+@app.route("/items/hide", methods=["POST"])
+def hide_items():
+    ids = _posted_ids()
+    if not ids:
+        flash("No items selected", "error")
+    else:
+        n = db.set_items_hidden(ids, True)
+        if n < 0:
+            flash("Failed to hide items", "error")
+        else:
+            flash(f"{n} item(s) hidden", "success")
+    return _redirect_back()
+
+
+@app.route("/items/unhide", methods=["POST"])
+def unhide_items():
+    ids = _posted_ids()
+    if not ids:
+        flash("No items selected", "error")
+    else:
+        n = db.set_items_hidden(ids, False)
+        if n < 0:
+            flash("Failed to unhide items", "error")
+        else:
+            flash(f"{n} item(s) unhidden", "success")
+    return _redirect_back()
 
 
 @app.route("/config")

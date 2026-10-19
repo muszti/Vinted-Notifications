@@ -16,6 +16,7 @@
             </div>
             <div class="card-body">
                 <form action="/items" method="get">
+                    {% if show_hidden %}<input type="hidden" name="show_hidden" value="1">{% endif %}
                     <div class="row">
                         <div class="col-md-5">
                             <div class="form-group mb-3">
@@ -62,6 +63,7 @@
                 <div class="d-flex align-items-center">
                     <i class="bi bi-box-seam me-2 text-info"></i>
                     <h5 class="card-title mb-0">
+                        {% if show_hidden %}Hidden items - {% endif %}
                         {% if selected_query %}
                         Items for query: <span class="text-info">{{ selected_query_display if selected_query_display else selected_query }}</span>
                         {% else %}
@@ -69,6 +71,11 @@
                         {% endif %}
                     </h5>
                 </div>
+                <div class="d-flex align-items-center">
+                <a href="{{ url_for('items', query=selected_query, limit=limit, show_hidden=(None if show_hidden else '1')) }}"
+                   class="btn btn-sm btn-outline-secondary me-2">
+                    {% if show_hidden %}<i class="bi bi-arrow-left me-1"></i> Back to new items{% else %}<i class="bi bi-eye-slash me-1"></i> Show hidden ({{ hidden_count }}){% endif %}
+                </a>
                 <div class="btn-group" role="group" aria-label="View toggle">
                     <button type="button" class="btn btn-sm btn-outline-primary" id="cardViewBtn">
                         <i class="bi bi-grid-3x3-gap-fill me-1"></i> Cards
@@ -77,8 +84,24 @@
                         <i class="bi bi-list-ul me-1"></i> List
                     </button>
                 </div>
+                </div>
             </div>
+            <form method="post" action="{{ url_for('unhide_items') if show_hidden else url_for('hide_items') }}">
             <div class="card-body">
+                <input type="hidden" name="return_query" value="{{ selected_query }}">
+                <input type="hidden" name="return_limit" value="{{ limit }}">
+                {% if show_hidden %}<input type="hidden" name="return_show_hidden" value="1">{% endif %}
+                {% for item in items %}<input type="hidden" name="visible_ids" value="{{ item.id }}">
+                {% endfor %}
+                <div class="d-flex gap-2 mb-3">
+                    <button type="submit" name="action" value="selected" class="btn btn-sm btn-outline-secondary" {% if not items %}disabled{% endif %}>
+                        <i class="bi bi-{{ 'eye' if show_hidden else 'eye-slash' }} me-1"></i> {{ 'Unhide selected' if show_hidden else 'Hide selected' }}
+                    </button>
+                    <button type="submit" name="action" value="all_visible" class="btn btn-sm btn-outline-secondary" {% if not items %}disabled{% endif %}
+                            onclick="return confirm('{{ 'Unhide' if show_hidden else 'Hide' }} all {{ items|length }} shown items?')">
+                        <i class="bi bi-{{ 'eye' if show_hidden else 'eye-slash' }} me-1"></i> {{ 'Unhide all shown' if show_hidden else 'Hide all shown' }}
+                    </button>
+                </div>
                 <!-- Card View -->
                 <div class="row" id="cardView">
                     {% for item in items %}
@@ -87,11 +110,13 @@
                             {% if item.photo_url %}
                             <div class="position-relative">
                                 <img src="{{ item.photo_url }}" class="card-img-top" alt="{{ item.title }}">
+                                <input class="form-check-input position-absolute top-0 start-0 m-2" type="checkbox" name="ids" value="{{ item.id }}">
                                 <span class="position-absolute top-0 end-0 m-2 badge bg-primary d-flex align-items-center"><i
                                         class="bi bi-search me-1"></i> {{ item.query|truncate(20) }}</span>
                             </div>
                             {% else %}
                             <div class="card-img-top bg-light d-flex align-items-center justify-content-center position-relative">
+                                <input class="form-check-input position-absolute top-0 start-0 m-2" type="checkbox" name="ids" value="{{ item.id }}">
                                 <i class="bi bi-image text-muted" style="font-size: 2rem;"></i>
                                 <span class="position-absolute top-0 end-0 m-2 badge bg-primary d-flex align-items-center"><i
                                         class="bi bi-search me-1"></i> {{ item.query|truncate(20) }}</span>
@@ -110,6 +135,9 @@
                                 <a href="{{ item.url }}" target="_blank" class="btn btn-primary w-100">
                                     <i class="bi bi-box-arrow-up-right me-1"></i> View on Vinted
                                 </a>
+                                <button type="submit" name="single_id" value="{{ item.id }}" class="btn btn-outline-secondary w-100 mt-2">
+                                    {% if show_hidden %}<i class="bi bi-eye me-1"></i> Unhide{% else %}<i class="bi bi-eye-slash me-1"></i> Hide{% endif %}
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -125,6 +153,7 @@
                     <table class="table table-hover mb-0">
                         <thead>
                         <tr>
+                            <th></th>
                             <th>Image</th>
                             <th>Title</th>
                             <th>Price</th>
@@ -136,6 +165,7 @@
                         <tbody>
                         {% for item in items %}
                         <tr>
+                            <td style="width: 30px;"><input class="form-check-input" type="checkbox" name="ids" value="{{ item.id }}"></td>
                             <td style="width: 60px;">
                                 {% if item.photo_url %}
                                 <img src="{{ item.photo_url }}" alt="{{ item.title }}" class="img-thumbnail"
@@ -155,17 +185,21 @@
                                 <a href="{{ item.url }}" target="_blank" class="btn btn-sm btn-primary">
                                     <i class="bi bi-box-arrow-up-right me-1"></i> View on Vinted
                                 </a>
+                                <button type="submit" name="single_id" value="{{ item.id }}" class="btn btn-sm btn-outline-secondary">
+                                    {% if show_hidden %}<i class="bi bi-eye me-1"></i> Unhide{% else %}<i class="bi bi-eye-slash me-1"></i> Hide{% endif %}
+                                </button>
                             </td>
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="6" class="text-center">No items found</td>
+                            <td colspan="7" class="text-center">No items found</td>
                         </tr>
                         {% endfor %}
                         </tbody>
                     </table>
                 </div>
             </div>
+            </form>
         </div>
     </div>
 </div>

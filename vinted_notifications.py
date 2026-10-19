@@ -205,7 +205,7 @@ if __name__ == "__main__":
     migration_files = [f for f in os.listdir("migrations")]
     while True:
         migration_file = next(
-            (f for f in migration_files if f.startswith(current_version)), None
+            (f for f in migration_files if f.startswith(current_version + "_")), None
         )
         if migration_file:
             logger.info(f"Running migration: {migration_file}")
