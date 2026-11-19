@@ -158,8 +158,8 @@ class Requester:
             "Referer": self.VINTED_AUTH_URL,
             "Origin": self.VINTED_AUTH_URL.rstrip("/"),
         }
-        token = self.session.cookies.get("access_token_web")
-        anon_id = self.session.cookies.get("anon_id")
+        token = self._get_cookie("access_token_web")
+        anon_id = self._get_cookie("anon_id")
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if anon_id:
@@ -209,7 +209,7 @@ class Requester:
             logger.debug(f"Using proxy: {self.session.proxies}")
 
         # The API is token-gated, so make sure we hold one before the first call.
-        if not self.session.cookies.get("access_token_web"):
+        if not self._get_cookie("access_token_web"):
             self.set_cookies()
 
         tried = 0
@@ -288,11 +288,15 @@ class Requester:
         Clears the current session cookies and makes a HEAD request to the Vinted
         www host, which hands back both `access_token_web` (the API bearer token)
         and `anon_id`. HEAD is enough and avoids downloading the ~2MB homepage.
+
+        The whole jar is cleared, not just session cookies: `access_token_web`
+        carries an expiry, so clear_session_cookies() kept the stale token and a
+        refresh then stored a second one next to it (CookieConflictError).
         """
-        self.session.cookies.clear_session_cookies()
+        self.session.cookies.clear()
         try:
             self.session.head(self.VINTED_AUTH_URL)
-            if not self.session.cookies.get("access_token_web"):
+            if not self._get_cookie("access_token_web"):
                 logger.warning(
                     f"No access_token_web cookie returned by {self.VINTED_AUTH_URL}"
                 )
@@ -303,6 +307,31 @@ class Requester:
                 logger.error(
                     "There was an error fetching cookies for vinted", exc_info=True
                 )
+
+    def _get_cookie(self, name):
+        """
+        Return the value of a session cookie without raising on duplicates.
+
+        The jar can hold several cookies with the same name (different domains
+        or paths, e.g. after switching locale). RequestsCookieJar.get() raises
+        CookieConflictError then, which used to fail every query. Prefer the
+        cookie set for the current www host's domain, else the last one seen.
+
+        Args:
+            name (str): The cookie name
+
+        Returns:
+            str or None: The cookie value, or None if absent.
+        """
+        matches = [c for c in self.session.cookies if c.name == name]
+        if not matches:
+            return None
+        host = self.locale.lower()
+        for cookie in reversed(matches):
+            domain = (cookie.domain or "").lstrip(".").lower()
+            if domain and (host == domain or host.endswith("." + domain)):
+                return cookie.value
+        return matches[-1].value
 
     def update_cookies(self, cookies: dict):
         """
